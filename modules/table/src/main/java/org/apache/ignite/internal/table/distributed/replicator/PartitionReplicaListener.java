@@ -404,7 +404,7 @@ public class PartitionReplicaListener implements ReplicaTableProcessor {
 
         schemaCompatValidator = new SchemaCompatibilityValidator(validationSchemasSource, catalogService, schemaSyncService);
 
-        indexBuildingProcessor = new PartitionReplicaBuildIndexProcessor(busyLock, tableId, indexMetaStorage, catalogService);
+        indexBuildingProcessor = new PartitionReplicaBuildIndexProcessor(busyLock, tableId, indexMetaStorage, catalogService, txManager);
 
         tableAwareReplicaRequestPreProcessor = new TableAwareReplicaRequestPreProcessor(
                 clockService,
@@ -2313,7 +2313,7 @@ public class PartitionReplicaListener implements ReplicaTableProcessor {
 
                 CompletableFuture<UUID> repFut = applyCmdWithExceptionHandling(cmd).handle((r, e) -> {
                     if (e != null) {
-                        throw new DelayedAckException(cmd.txId(), unwrapCause(e));
+                        throw new DelayedAckException(cmd.txId(), unwrapCause(e), txManager);
                     }
 
                     return cmd.txId();
@@ -2326,7 +2326,10 @@ public class PartitionReplicaListener implements ReplicaTableProcessor {
                 UpdateCommandResult updateCommandResult = (UpdateCommandResult) res;
 
                 if (updateCommandResult != null && !updateCommandResult.isPrimaryReplicaMatch()) {
-                    throw new PrimaryReplicaMissException(txId, cmd.leaseStartTime(), updateCommandResult.currentLeaseStartTime());
+                    throw new PrimaryReplicaMissException(
+                            formatTxInfo(cmd.txId(), txManager),
+                            cmd.leaseStartTime(),
+                            updateCommandResult.currentLeaseStartTime());
                 }
 
                 if (updateCommandResult != null && updateCommandResult.isPrimaryInPeersAndLearners()) {
@@ -2452,7 +2455,7 @@ public class PartitionReplicaListener implements ReplicaTableProcessor {
 
             CompletableFuture<UUID> repFut = applyCmdWithExceptionHandling(cmd).handle((r, e) -> {
                 if (e != null) {
-                    throw new DelayedAckException(cmd.txId(), unwrapCause(e));
+                    throw new DelayedAckException(cmd.txId(), unwrapCause(e), txManager);
                 }
 
                 return cmd.txId();
@@ -2465,7 +2468,7 @@ public class PartitionReplicaListener implements ReplicaTableProcessor {
 
                 if (!updateCommandResult.isPrimaryReplicaMatch()) {
                     throw new PrimaryReplicaMissException(
-                            cmd.txId(),
+                            formatTxInfo(cmd.txId(), txManager),
                             cmd.leaseStartTime(),
                             updateCommandResult.currentLeaseStartTime()
                     );
