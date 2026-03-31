@@ -28,7 +28,7 @@ import static org.apache.ignite.internal.sql.engine.util.SqlTestUtils.expectQuer
 import static org.apache.ignite.internal.testframework.IgniteTestUtils.assertThrowsWithCause;
 import static org.apache.ignite.internal.testframework.IgniteTestUtils.assertThrowsWithCode;
 import static org.apache.ignite.internal.testframework.IgniteTestUtils.await;
-import static org.apache.ignite.internal.testframework.IgniteTestUtils.waitForCondition;
+import static org.apache.ignite.internal.util.ExceptionUtils.hasCause;
 import static org.apache.ignite.lang.ErrorGroups.Replicator.REPLICA_MISS_ERR;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.greaterThan;
@@ -55,6 +55,7 @@ import java.util.stream.IntStream;
 import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.ignite.Ignite;
 import org.apache.ignite.internal.catalog.commands.CatalogUtils;
+import org.apache.ignite.internal.client.tx.ClientLazyTransaction;
 import org.apache.ignite.internal.sql.BaseSqlIntegrationTest;
 import org.apache.ignite.internal.sql.ColumnMetadataImpl;
 import org.apache.ignite.internal.sql.ColumnMetadataImpl.ColumnOriginImpl;
@@ -87,6 +88,7 @@ import org.apache.ignite.sql.Statement.StatementBuilder;
 import org.apache.ignite.tx.Transaction;
 import org.apache.ignite.tx.TransactionException;
 import org.apache.ignite.tx.TransactionOptions;
+import org.awaitility.Awaitility;
 import org.hamcrest.Matcher;
 import org.jetbrains.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
@@ -750,7 +752,7 @@ public abstract class ItSqlApiBaseTest extends BaseSqlIntegrationTest {
         IgniteSql sql = igniteSql();
 
         Transaction tx = igniteTx().begin();
-        UUID txId = tx instanceof InternalTransaction ? ((InternalTransaction) tx).id() : null;
+        UUID txId = txId(tx);
 
         // Enlist enough operations to make rollback non-trivial.
         for (int i = 0; i < 100; i++) {
@@ -771,16 +773,15 @@ public abstract class ItSqlApiBaseTest extends BaseSqlIntegrationTest {
             );
         }
 
-        if (txId != null) {
-            assertTrue(waitForCondition(() -> {
-                TxStateMeta meta = txManager().stateMeta(txId);
+        assertNotNull(txId, "Expected transaction id for test transaction implementation");
 
-                return meta != null && TxState.isFinalState(meta.txState());
-            }, 5_000), "Expected transaction to reach final state");
-        } else {
-            // Client transaction API doesn't expose internal tx id, wait a bit to compare with a later request.
-            Thread.sleep(500);
-        }
+        Awaitility.await()
+                .atMost(5, TimeUnit.SECONDS)
+                .until(() -> {
+                    TxStateMeta meta = txManager().stateMeta(txId);
+
+                    return meta != null && TxState.isFinalState(meta.txState());
+                });
 
         IgniteException abortedStateException = (IgniteException) assertThrowsWithCause(
                 () -> executeForRead(sql, tx, "SELECT * FROM tst WHERE id = ?", 1),
@@ -794,6 +795,50 @@ public abstract class ItSqlApiBaseTest extends BaseSqlIntegrationTest {
             assertEquals(abortedStateException.code(), immediateException.code());
             assertTrue(immediateException.getMessage().contains("Transaction is already finished due to an error"));
         }
+    }
+
+    @Test
+    public void runtimeErrorCauseIsPreservedForParallelRequestDuringRollback() {
+        sql("CREATE TABLE tst(id INTEGER PRIMARY KEY, val INTEGER)");
+
+        IgniteSql sql = igniteSql();
+
+        Transaction tx = igniteTx().begin();
+
+        // Enlist enough operations to make rollback non-trivial.
+        for (int i = 0; i < 100; i++) {
+            execute(tx, sql, "INSERT INTO tst VALUES (?, ?)", i, i);
+        }
+
+        CompletableFuture<Void> failingRequestFut = IgniteTestUtils.runAsync(() -> assertThrowsSqlException(
+                Sql.RUNTIME_ERR,
+                "Division by zero",
+                () -> execute(tx, sql, "SELECT val / 0 FROM tst WHERE id = ?", 0)
+        ));
+
+        Awaitility.await()
+                .atMost(5, TimeUnit.SECONDS)
+                .untilAsserted(() -> {
+                    IgniteException parallelRequestException = assertInstanceOf(
+                            IgniteException.class,
+                            assertThrowsWithCause(
+                                    () -> {
+                                        try (ResultSet<SqlRow> ignored = executeForRead(sql, tx, "SELECT * FROM tst WHERE id = ?", 1)) {
+                                            // No-op.
+                                        }
+                                    },
+                                    IgniteException.class
+                            )
+                    );
+
+                    assertEquals(Transactions.TX_ALREADY_FINISHED_WITH_EXCEPTION_ERR, parallelRequestException.code());
+                    assertTrue(
+                            hasCause(parallelRequestException, "Division by zero", Throwable.class),
+                            "Expected original rollback cause in user-visible exception chain"
+                    );
+                });
+
+        await(failingRequestFut);
     }
 
     @Test
@@ -822,7 +867,7 @@ public abstract class ItSqlApiBaseTest extends BaseSqlIntegrationTest {
         assertEquals(Transactions.TX_ALREADY_FINISHED_WITH_EXCEPTION_ERR, ex.code());
         assertTrue(ex.getMessage().contains("Transaction is already finished due to an error"));
         assertTrue(hasCause(ex, TransactionException.class));
-        assertTrue(hasMessageInChain(ex, rollbackCauseMessage), "Expected rollback cause message in user-visible exception chain");
+        assertTrue(hasCause(ex, rollbackCauseMessage, Throwable.class), "Expected rollback cause message in user-visible exception chain");
     }
 
     @Test
@@ -1487,32 +1532,16 @@ public abstract class ItSqlApiBaseTest extends BaseSqlIntegrationTest {
 
     protected abstract ResultSet<SqlRow> executeForRead(IgniteSql sql, @Nullable Transaction tx, Statement statement, Object... args);
 
-    private static boolean hasCause(Throwable throwable, Class<? extends Throwable> targetClass) {
-        Throwable cur = throwable;
-
-        while (cur != null) {
-            if (targetClass.isInstance(cur)) {
-                return true;
-            }
-
-            cur = cur.getCause();
+    private static @Nullable UUID txId(Transaction tx) {
+        if (tx instanceof InternalTransaction) {
+            return ((InternalTransaction) tx).id();
         }
 
-        return false;
-    }
-
-    private static boolean hasMessageInChain(Throwable throwable, String messagePart) {
-        Throwable cur = throwable;
-
-        while (cur != null) {
-            if (cur.getMessage() != null && cur.getMessage().contains(messagePart)) {
-                return true;
-            }
-
-            cur = cur.getCause();
+        if (tx instanceof ClientLazyTransaction) {
+            return ((ClientLazyTransaction) tx).startedTx().txId();
         }
 
-        return false;
+        return null;
     }
 
     protected void checkSqlError(

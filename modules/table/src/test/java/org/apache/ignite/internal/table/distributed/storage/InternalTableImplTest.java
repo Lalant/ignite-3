@@ -588,10 +588,10 @@ public class InternalTableImplTest extends BaseIgniteAbstractTest {
 
         @ParameterizedTest
         @CsvSource({
-            "0, 0",           // GREATER | LESS (both exclusive)
-            "1, 0",           // GREATER_OR_EQUAL | LESS (lower inclusive, upper exclusive)
-            "0, 2",           // GREATER | LESS_OR_EQUAL (lower exclusive, upper inclusive)
-            "1, 2"            // GREATER_OR_EQUAL | LESS_OR_EQUAL (both inclusive)
+                "0, 0",           // GREATER | LESS (both exclusive)
+                "1, 0",           // GREATER_OR_EQUAL | LESS (lower inclusive, upper exclusive)
+                "0, 2",           // GREATER | LESS_OR_EQUAL (lower exclusive, upper inclusive)
+                "1, 2"            // GREATER_OR_EQUAL | LESS_OR_EQUAL (both inclusive)
         })
         void testRangeWithDifferentFlags(int lowerFlag, int upperFlag) {
             InternalTableImpl internalTable = newInternalTable(TABLE_ID, 1);
@@ -984,6 +984,7 @@ public class InternalTableImplTest extends BaseIgniteAbstractTest {
         } catch (Exception e) {
             Throwable unwrapped = unwrapCause(e);
             assertThat("Error should be TransactionException", unwrapped, is(instanceOf(TransactionException.class)));
+
             TransactionException txEx = (TransactionException) unwrapped;
             assertThat("Error code should be TX_ALREADY_FINISHED_WITH_EXCEPTION_ERR",
                     txEx.code(), is(TX_ALREADY_FINISHED_WITH_EXCEPTION_ERR));
