@@ -752,12 +752,13 @@ public abstract class ItSqlApiBaseTest extends BaseSqlIntegrationTest {
         IgniteSql sql = igniteSql();
 
         Transaction tx = igniteTx().begin();
-        UUID txId = txId(tx);
 
         // Enlist enough operations to make rollback non-trivial.
         for (int i = 0; i < 100; i++) {
             execute(tx, sql, "INSERT INTO tst VALUES (?, ?)", i, i);
         }
+
+        UUID txId = txId(tx);
 
         assertThrowsSqlException(
                 Sql.RUNTIME_ERR,
@@ -773,15 +774,17 @@ public abstract class ItSqlApiBaseTest extends BaseSqlIntegrationTest {
             );
         }
 
-        assertNotNull(txId, "Expected transaction id for test transaction implementation");
+        if (tx instanceof InternalTransaction) {
+            assertNotNull(txId, "Expected transaction id for test transaction implementation");
 
-        Awaitility.await()
-                .atMost(5, TimeUnit.SECONDS)
-                .until(() -> {
-                    TxStateMeta meta = txManager().stateMeta(txId);
+            Awaitility.await()
+                    .atMost(5, TimeUnit.SECONDS)
+                    .until(() -> {
+                        TxStateMeta meta = txManager().stateMeta(txId);
 
-                    return meta != null && TxState.isFinalState(meta.txState());
-                });
+                        return meta != null && TxState.isFinalState(meta.txState());
+                    });
+        }
 
         IgniteException abortedStateException = (IgniteException) assertThrowsWithCause(
                 () -> executeForRead(sql, tx, "SELECT * FROM tst WHERE id = ?", 1),
@@ -819,14 +822,18 @@ public abstract class ItSqlApiBaseTest extends BaseSqlIntegrationTest {
         Awaitility.await()
                 .atMost(5, TimeUnit.SECONDS)
                 .untilAsserted(() -> {
+                    Transaction parallelTx = igniteTx().begin();
+
+                    try (ResultSet<SqlRow> ignored = executeForRead(sql, parallelTx, "SELECT * FROM tst WHERE id = ?", 1)) {
+                        // No-op.
+                    } finally {
+                        parallelTx.rollback();
+                    }
+
                     IgniteException parallelRequestException = assertInstanceOf(
                             IgniteException.class,
                             assertThrowsWithCause(
-                                    () -> {
-                                        try (ResultSet<SqlRow> ignored = executeForRead(sql, tx, "SELECT * FROM tst WHERE id = ?", 1)) {
-                                            // No-op.
-                                        }
-                                    },
+                                    () -> executeForRead(sql, tx, "SELECT * FROM tst WHERE id = ?", 1),
                                     IgniteException.class
                             )
                     );
