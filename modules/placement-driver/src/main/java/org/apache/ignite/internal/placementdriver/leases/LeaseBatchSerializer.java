@@ -557,6 +557,8 @@ public class LeaseBatchSerializer extends VersionedSerializer<LeaseBatch> {
 
     private static boolean holderIdAndProposedCandidateFitIn1ByteForRead(byte protoVer, NodesDictionary dictionary) {
         if (protoVer == PROTOCOL_V1) {
+            // In V1 format, we assumed that name and node tables have the same size,
+            // so compact-mode eligibility was determined only by the name table size.
             return dictionary.nameCount() <= MAX_NODES_FOR_COMPACT_MODE;
         }
 

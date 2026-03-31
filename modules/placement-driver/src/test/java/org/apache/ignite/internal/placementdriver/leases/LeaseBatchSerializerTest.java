@@ -29,6 +29,7 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.Month;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
@@ -39,6 +40,7 @@ import org.apache.ignite.internal.hlc.HybridTimestamp;
 import org.apache.ignite.internal.replicator.PartitionGroupId;
 import org.apache.ignite.internal.replicator.TablePartitionId;
 import org.apache.ignite.internal.replicator.ZonePartitionId;
+import org.apache.ignite.internal.util.io.IgniteUnsafeDataInput;
 import org.apache.ignite.internal.util.io.IgniteUnsafeDataOutput;
 import org.apache.ignite.internal.versioned.VersionedSerialization;
 import org.junit.jupiter.api.Test;
@@ -319,6 +321,71 @@ class LeaseBatchSerializerTest {
     }
 
     @Test
+    void v2CanBeDeserialized() {
+        LeaseBatch originalBatch = new LeaseBatch(createLeases(baseTs(), TablePartitionId::new));
+
+        byte[] bytes = VersionedSerialization.toBytes(originalBatch, serializer);
+
+        // VersionedSerializer header stores protocol version in the first byte.
+        assertEquals(2, bytes[0] & 0xFF);
+
+        LeaseBatch restoredBatch = VersionedSerialization.fromBytes(bytes, serializer);
+
+        assertThat(restoredBatch.leases(), containsInAnyOrder(originalBatch.leases().toArray()));
+        assertEquals(
+                originalBatch.leases().stream().map(Lease::proposedCandidate).collect(toList()),
+                restoredBatch.leases().stream().map(Lease::proposedCandidate).collect(toList())
+        );
+    }
+
+    @Test
+    void v2WithExactly8NamesAndMoreThan8NodeIdsDoesNotUseCompactNodesInfoEncoding() throws IOException {
+        List<Lease> originalLeases = new ArrayList<>();
+
+        for (int i = 0; i < 8; i++) {
+            originalLeases.add(tableLease("node" + i, new UUID(0, i + 1), null, i));
+        }
+
+        originalLeases.add(tableLease("node2", new UUID(0, 9), "node3", 8));
+
+        byte[] bytes = VersionedSerialization.toBytes(new LeaseBatch(originalLeases), serializer);
+
+        try (IgniteUnsafeDataInput in = new IgniteUnsafeDataInput(bytes)) {
+            in.readInt(); // Header written by VersionedSerializer.
+
+            in.readVarInt(); // minExpirationTimePhysical
+            in.readVarInt(); // commonExpirationTimePhysicalDelta
+            in.readVarInt(); // commonExpirationTimeLogical
+
+            assertEquals(8, in.readVarIntAsInt()); // nameCount
+            for (int i = 0; i < 8; i++) {
+                in.readUTF();
+            }
+
+            assertEquals(9, in.readVarIntAsInt()); // nodeCount
+            for (int i = 0; i < 9; i++) {
+                in.readUuid();
+                in.readVarIntAsInt();
+            }
+
+            assertEquals(1, in.readVarIntAsInt()); // table object count
+            assertEquals(1, in.readVarIntAsInt()); // objectId delta
+            assertEquals(9, in.readVarIntAsInt()); // partition count
+
+            for (int i = 0; i < 8; i++) {
+                in.readUnsignedByte(); // flags
+                in.readVarIntAsInt(); // holder index
+                in.readVarInt(); // period
+                in.readVarIntAsInt(); // start logical
+            }
+
+            assertEquals(0x07, in.readUnsignedByte()); // accepted + prolongable + hasProposedCandidate
+            assertEquals(8, in.readVarIntAsInt()); // holder index
+            assertEquals(3, in.readVarIntAsInt()); // proposed candidate name index
+        }
+    }
+
+    @Test
     void v1WithExactly8NamesAndMoreThan8NodeIdsCanBeDeserialized() throws IOException {
         byte[] bytes = v1BytesWithExactly8NamesAndMoreThan8NodeIdsUsingCompactEncoding();
 
@@ -340,6 +407,8 @@ class LeaseBatchSerializerTest {
     }
 
     private static byte[] v1BytesWithExactly8NamesAndMoreThan8NodeIdsUsingCompactEncoding() throws IOException {
+        // Crafted manually to reproduce a V1-only layout: V1 allowed compact nodes info based only on nameCount,
+        // while the current serializer writes V2 and would not emit compact encoding when nodeCount > 8.
         try (IgniteUnsafeDataOutput out = new IgniteUnsafeDataOutput(256)) {
             // Header written by VersionedSerializer.writeExternal(): MAGIC(0x43BEEF00) + protocolVersion(1).
             out.writeInt(0x43BEEF01);
