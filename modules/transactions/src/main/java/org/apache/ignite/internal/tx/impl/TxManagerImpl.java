@@ -660,8 +660,10 @@ public class TxManagerImpl implements TxManager, NetworkMessageHandler, SystemVi
             Map<ZonePartitionId, PendingTxPartitionEnlistment> enlistedGroups,
             UUID txId
     ) {
-        LOG.debug("Finish [commit={}, {}, groups={}, commitPartId={}].", commitIntent,
-                formatTxInfo(txId, txStateVolatileStorage, false), enlistedGroups, commitPartition);
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Finish [commit={}, {}, groups={}, commitPartId={}].", commitIntent,
+                    formatTxInfo(txId, txStateVolatileStorage, false), enlistedGroups, commitPartition);
+        }
 
         assert enlistedGroups != null;
 
@@ -871,8 +873,10 @@ public class TxManagerImpl implements TxManager, NetworkMessageHandler, SystemVi
                         }
 
                         if (ReplicatorRecoverableExceptions.isRecoverable(cause)) {
-                            LOG.debug("Failed to finish Tx. The operation will be retried {}.", ex,
-                                    formatTxInfo(txId, txStateVolatileStorage));
+                            if (LOG.isDebugEnabled()) {
+                                LOG.debug("Failed to finish Tx. The operation will be retried {}.", ex,
+                                        formatTxInfo(txId, txStateVolatileStorage));
+                            }
                             return supplyAsync(() -> durableFinish(
                                     observableTimestampTracker,
                                     commitPartition,
@@ -906,9 +910,11 @@ public class TxManagerImpl implements TxManager, NetworkMessageHandler, SystemVi
             HybridTimestamp commitTimestamp,
             CompletableFuture<TransactionMeta> txFinishFuture
     ) {
-        LOG.debug("Finish [partition={}, node={}, enlistmentConsistencyToken={}, commit={}, {}, groups={}",
-                commitPartition, primaryConsistentId, enlistmentConsistencyToken, commit,
-                formatTxInfo(txId, txStateVolatileStorage, false), enlistedPartitions);
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Finish [partition={}, node={}, enlistmentConsistencyToken={}, commit={}, {}, groups={}",
+                    commitPartition, primaryConsistentId, enlistmentConsistencyToken, commit,
+                    formatTxInfo(txId, txStateVolatileStorage, false), enlistedPartitions);
+        }
 
         return txMessageSender.finish(
                         primaryConsistentId,

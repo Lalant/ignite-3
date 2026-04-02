@@ -807,8 +807,10 @@ public class NodeImpl implements Node, RaftServerService {
             }
 
             if (this.electionTimeoutCounter == 1) {
-                LOG.debug("Node {} does not initiate leader election and waits for the next election timeout.",
-                    getNodeId());
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Node {} does not initiate leader election and waits for the next election timeout.",
+                        getNodeId());
+                }
                 return false;
             }
         }
@@ -1146,7 +1148,9 @@ public class NodeImpl implements Node, RaftServerService {
             }
 
             if (this.snapshotExecutor != null && this.options.getSnapshotIntervalSecs() > 0) {
-                LOG.debug("Node {} start snapshot timer, term={}.", getNodeId(), this.currTerm);
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Node {} start snapshot timer, term={}.", getNodeId(), this.currTerm);
+                }
                 this.snapshotTimer.start();
             }
 
@@ -1223,7 +1227,9 @@ public class NodeImpl implements Node, RaftServerService {
         long lastCommittedIndex = getLastCommittedIndexOnInit();
 
         ballotBoxOpts.setLastCommittedIndex(lastCommittedIndex);
-        LOG.debug("Node {} init ballot box's lastCommittedIndex={}.", getNodeId(), lastCommittedIndex);
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Node {} init ballot box's lastCommittedIndex={}.", getNodeId(), lastCommittedIndex);
+        }
         return this.ballotBox.init(ballotBoxOpts);
     }
 
@@ -1447,7 +1453,9 @@ public class NodeImpl implements Node, RaftServerService {
                 return;
             }
             if (this.state == State.STATE_FOLLOWER) {
-                LOG.debug("Node {} stop election timer, term={}.", getNodeId(), this.currTerm);
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Node {} stop election timer, term={}.", getNodeId(), this.currTerm);
+                }
                 this.electionTimer.stop();
             }
             resetLeaderId(PeerId.emptyPeer(), new Status(RaftError.ERAFTTIMEDOUT,
@@ -1455,7 +1463,9 @@ public class NodeImpl implements Node, RaftServerService {
             this.state = State.STATE_CANDIDATE;
             this.currTerm++;
             this.votedId = this.serverId.copy();
-            LOG.debug("Node {} start vote timer, term={} .", getNodeId(), this.currTerm);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Node {} start vote timer, term={} .", getNodeId(), this.currTerm);
+            }
             this.voteTimer.start();
             this.voteCtx.init(this.conf.getConf(), this.conf.isStable() ? null : this.conf.getOldConf());
             electSelfTerm = this.currTerm;
@@ -1568,7 +1578,9 @@ public class NodeImpl implements Node, RaftServerService {
             if (peer.equals(this.serverId)) {
                 continue;
             }
-            LOG.debug("Node {} add a replicator, term={}, peer={}.", getNodeId(), this.currTerm, peer);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Node {} add a replicator, term={}, peer={}.", getNodeId(), this.currTerm, peer);
+            }
             if (!this.replicatorGroup.addReplicator(peer)) {
                 LOG.error("Fail to add a replicator [node={}, peer={}].", getNodeId(), peer);
             }
@@ -1576,7 +1588,9 @@ public class NodeImpl implements Node, RaftServerService {
 
         // Start learner's replicators
         for (final PeerId peer : this.conf.listLearners()) {
-            LOG.debug("Node {} add a learner replicator, term={}, peer={}.", getNodeId(), this.currTerm, peer);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Node {} add a learner replicator, term={}, peer={}.", getNodeId(), this.currTerm, peer);
+            }
             if (!this.replicatorGroup.addReplicator(peer, ReplicatorType.Learner)) {
                 LOG.error("Fail to add a learner replicator [node={}, peer={}].", getNodeId(), peer);
             }
@@ -1597,8 +1611,10 @@ public class NodeImpl implements Node, RaftServerService {
 
     // should be in writeLock
     private void stepDown(final long term, final boolean wakeupCandidate, final Status status) {
-        LOG.debug("Node {} stepDown, term={}, newTerm={}, wakeupCandidate={}.", getNodeId(), this.currTerm, term,
-            wakeupCandidate);
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Node {} stepDown, term={}, newTerm={}, wakeupCandidate={}.", getNodeId(), this.currTerm, term,
+                wakeupCandidate);
+        }
         if (!this.state.isActive()) {
             return;
         }
@@ -1653,7 +1669,9 @@ public class NodeImpl implements Node, RaftServerService {
             this.electionTimer.restart();
         }
         else {
-            LOG.debug("Node {} is a learner, election timer is not started.", this.getNodeId());
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Node {} is a learner, election timer is not started.", this.getNodeId());
+            }
         }
     }
 
@@ -1722,7 +1740,9 @@ public class NodeImpl implements Node, RaftServerService {
             State nodeState = this.state;
             if (nodeState != State.STATE_LEADER) {
                 final Status st = cannotApplyBecauseNotLeaderStatus(nodeState);
-                LOG.debug("Node {} can't apply, status={}.", getNodeId(), st);
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Node {} can't apply, status={}.", getNodeId(), st);
+                }
                 final List<Closure> dones = tasks.stream().map(ele -> ele.done)
                         .filter(Objects::nonNull).collect(Collectors.toList());
                 Utils.runInThread(this.getOptions().getCommonExecutor(), () -> {
@@ -1740,8 +1760,10 @@ public class NodeImpl implements Node, RaftServerService {
                 final LogEntryAndClosure task = tasks.get(i);
 
                 if (task.expectedTerm != -1 && task.expectedTerm != this.currTerm) {
-                    LOG.debug("Node {} can't apply task whose expectedTerm={} doesn't match currTerm={}.", getNodeId(),
-                        task.expectedTerm, this.currTerm);
+                    if (LOG.isDebugEnabled()) {
+                        LOG.debug("Node {} can't apply task whose expectedTerm={} doesn't match currTerm={}.", getNodeId(),
+                            task.expectedTerm, this.currTerm);
+                    }
                     if (task.done != null) {
                         final Status st = new Status(RaftError.EPERM, "expected_term=%d doesn't match current_term=%d",
                             task.expectedTerm, this.currTerm);
@@ -2807,7 +2829,9 @@ public class NodeImpl implements Node, RaftServerService {
             if (st.getCode() == RaftError.ETIMEDOUT.getNumber()
                 && Utils.monotonicMs() - this.replicatorGroup.getLastRpcSendTimestamp(peer) <= this.options
                 .getElectionTimeoutMs()) {
-                LOG.debug("Node {} waits peer {} to catch up.", getNodeId(), peer);
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Node {} waits peer {} to catch up.", getNodeId(), peer);
+                }
                 final OnCaughtUp caughtUp = new OnCaughtUp(this, term, peer, version);
                 final long dueTime = Utils.nowMs() + this.options.getElectionTimeoutMs();
                 if (this.replicatorGroup.waitCaughtUp(peer, this.options.getCatchupMargin(), dueTime, caughtUp)) {
@@ -2913,8 +2937,10 @@ public class NodeImpl implements Node, RaftServerService {
             this.readLock.lock();
             try {
                 if (this.state.compareTo(State.STATE_TRANSFERRING) > 0) {
-                    LOG.debug("Node {} stop step-down timer, term={}, state={}.", getNodeId(), this.currTerm,
-                        this.state);
+                    if (LOG.isDebugEnabled()) {
+                        LOG.debug("Node {} stop step-down timer, term={}, state={}.", getNodeId(), this.currTerm,
+                            this.state);
+                    }
                     return;
                 }
                 final long monotonicNowMs = Utils.monotonicMs();
@@ -2937,7 +2963,9 @@ public class NodeImpl implements Node, RaftServerService {
         this.writeLock.lock();
         try {
             if (this.state.compareTo(State.STATE_TRANSFERRING) > 0) {
-                LOG.debug("Node {} stop step-down timer, term={}, state={}.", getNodeId(), this.currTerm, this.state);
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Node {} stop step-down timer, term={}, state={}.", getNodeId(), this.currTerm, this.state);
+                }
                 return;
             }
             final long monotonicNowMs = Utils.monotonicMs();
@@ -3319,8 +3347,10 @@ public class NodeImpl implements Node, RaftServerService {
                     "Raft node receives higher term pre_vote_response."));
                 return;
             }
-            LOG.debug("Node {} received PreVoteResponse from {}, term={}, granted={}.", getNodeId(), peerId,
-                response.term(), response.granted());
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Node {} received PreVoteResponse from {}, term={}, granted={}.", getNodeId(), peerId,
+                    response.term(), response.granted());
+            }
             // check granted quorum?
             if (response.granted()) {
                 this.prevVoteCtx.grant(peerId);
@@ -3368,7 +3398,9 @@ public class NodeImpl implements Node, RaftServerService {
     private void preVote() {
         long preVoteTerm;
         try {
-            LOG.debug("Node {} term {} start preVote.", getNodeId(), this.currTerm);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Node {} term {} start preVote.", getNodeId(), this.currTerm);
+            }
             if (this.snapshotExecutor != null && this.snapshotExecutor.isInstallingSnapshot()) {
                 LOG.warn(
                     "Node {} term {} doesn't do preVote when installing snapshot as the configuration may be out of date.",
@@ -3454,7 +3486,9 @@ public class NodeImpl implements Node, RaftServerService {
             preVote();
         }
         else {
-            LOG.debug("Node {} term {} retry to vote self.", getNodeId(), this.currTerm);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Node {} term {} retry to vote self.", getNodeId(), this.currTerm);
+            }
             // unlock in electSelf
             electSelf();
         }

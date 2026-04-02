@@ -177,7 +177,9 @@ class ReplicaStateManager {
         synchronized (context) {
             ReplicaState state = context.replicaState;
 
-            LOG.debug("Weak replica start [grp={}, state={}, future={}].", groupId, state, context.previousOperationFuture);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Weak replica start [grp={}, state={}, future={}].", groupId, state, context.previousOperationFuture);
+            }
 
             if (state == ReplicaState.STOPPED || state == ReplicaState.STOPPING) {
                 return startReplica(groupId, context, startOperation);
@@ -194,7 +196,9 @@ class ReplicaStateManager {
             } else if (state == ReplicaState.PRIMARY_ONLY) {
                 context.replicaState = ReplicaState.ASSIGNED;
 
-                LOG.debug("Weak replica start complete [state={}].", context.replicaState);
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Weak replica start complete [state={}].", context.replicaState);
+                }
 
                 return trueCompletedFuture();
             } else if (state == ReplicaState.RESTART_PLANNED) {
@@ -224,7 +228,9 @@ class ReplicaStateManager {
                         }
                     }
 
-                    LOG.debug("Weak replica start complete [state={}, partitionStarted={}].", context.replicaState, partitionStarted);
+                    if (LOG.isDebugEnabled()) {
+                        LOG.debug("Weak replica start complete [state={}, partitionStarted={}].", context.replicaState, partitionStarted);
+                    }
 
                     return partitionStarted;
                 }))
@@ -258,8 +264,10 @@ class ReplicaStateManager {
         synchronized (context) {
             ReplicaState state = context.replicaState;
 
-            LOG.debug("Weak replica stop [grpId={}, state={}, reason={}, reservedForPrimary={}, future={}].", groupId, state,
-                    reason, context.reservedForPrimary, context.previousOperationFuture);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Weak replica stop [grpId={}, state={}, reason={}, reservedForPrimary={}, future={}].", groupId, state,
+                        reason, context.reservedForPrimary, context.previousOperationFuture);
+            }
 
             if (reason == WeakReplicaStopReason.EXCLUDED_FROM_ASSIGNMENTS) {
                 if (state == ReplicaState.ASSIGNED) {
@@ -296,7 +304,9 @@ class ReplicaStateManager {
             }
             // State #RESTART_PLANNED is also no-op because replica will be stopped within deferred operation.
 
-            LOG.debug("Weak replica stop (sync part) complete [grpId={}, state={}].", groupId, context.replicaState);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Weak replica stop (sync part) complete [grpId={}, state={}].", groupId, context.replicaState);
+            }
 
             return nullCompletedFuture();
         }
@@ -330,7 +340,9 @@ class ReplicaStateManager {
                         context.replicaState = ReplicaState.STOPPED;
                     }
 
-                    LOG.debug("Weak replica stop complete [grpId={}, state={}].", groupId, context.replicaState);
+                    if (LOG.isDebugEnabled()) {
+                        LOG.debug("Weak replica stop complete [grpId={}, state={}].", groupId, context.replicaState);
+                    }
 
                     return true;
                 }))
@@ -349,7 +361,9 @@ class ReplicaStateManager {
             Supplier<CompletableFuture<Void>> deferredStopOperation
     ) {
         synchronized (context) {
-            LOG.debug("Planning deferred replica stop [groupId={}, reservedForPrimary={}].", groupId, context.reservedForPrimary);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Planning deferred replica stop [groupId={}, reservedForPrimary={}].", groupId, context.reservedForPrimary);
+            }
 
             // No parallel actions affected this, continue.
             if (context.reservedForPrimary) {
@@ -377,8 +391,10 @@ class ReplicaStateManager {
         ReplicaStateContext context = getContext(groupId);
 
         synchronized (context) {
-            LOG.debug("Trying to reserve replica [groupId={}, leaseStartTime={}, replicaState={}, reservedForPrimary={}].",
-                    groupId, leaseStartTime, context.replicaState, context.reservedForPrimary);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Trying to reserve replica [groupId={}, leaseStartTime={}, replicaState={}, reservedForPrimary={}].",
+                        groupId, leaseStartTime, context.replicaState, context.reservedForPrimary);
+            }
 
             ReplicaState state = context.replicaState;
 
@@ -525,7 +541,9 @@ class ReplicaStateManager {
                         this.leaseStartTime));
             }
 
-            LOG.debug("Reserving replica [groupId={}, leaseStartTime={}].", groupId, leaseStartTime);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Reserving replica [groupId={}, leaseStartTime={}].", groupId, leaseStartTime);
+            }
 
             this.leaseStartTime = leaseStartTime;
             this.reservedForPrimary = true;
