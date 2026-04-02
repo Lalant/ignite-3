@@ -27,6 +27,7 @@ import static org.apache.ignite.internal.tx.TxState.isFinalState;
 import static org.apache.ignite.internal.tx.TxStateMetaFinishing.castToFinishing;
 import static org.apache.ignite.internal.util.CompletableFutures.nullCompletedFuture;
 import static org.apache.ignite.internal.util.ExceptionUtils.sneakyThrow;
+import static org.apache.ignite.lang.ErrorGroups.Transactions.TX_ABORTED_DUE_TO_RECOVERY_ERR;
 import static org.apache.ignite.lang.ErrorGroups.Transactions.TX_ROLLBACK_ERR;
 
 import java.util.Map;
@@ -92,7 +93,7 @@ public class TxRecoveryEngine {
                         // Tx recovery is executed on the commit partition.
                         commitPartitionId,
                         false,
-                        new TransactionInternalException(TX_ROLLBACK_ERR, format("Transaction has been aborted"
+                        new TransactionInternalException(TX_ABORTED_DUE_TO_RECOVERY_ERR, format("Transaction has been aborted"
                                 + " due to transaction recovery {}.", formatTxInfo(txId, txManager))),
                         true,
                         false,
