@@ -54,6 +54,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.ignite.Ignite;
+import org.apache.ignite.internal.app.IgniteImpl;
 import org.apache.ignite.internal.catalog.commands.CatalogUtils;
 import org.apache.ignite.internal.client.tx.ClientLazyTransaction;
 import org.apache.ignite.internal.sql.BaseSqlIntegrationTest;
@@ -66,6 +67,7 @@ import org.apache.ignite.internal.tx.InternalTransaction;
 import org.apache.ignite.internal.tx.TxManager;
 import org.apache.ignite.internal.tx.TxState;
 import org.apache.ignite.internal.tx.TxStateMeta;
+import org.apache.ignite.internal.tx.message.TxMessageGroup;
 import org.apache.ignite.lang.CancelHandle;
 import org.apache.ignite.lang.CancellationToken;
 import org.apache.ignite.lang.CursorClosedException;
@@ -801,51 +803,88 @@ public abstract class ItSqlApiBaseTest extends BaseSqlIntegrationTest {
     }
 
     @Test
-    public void runtimeErrorCauseIsPreservedForParallelRequestDuringRollback() {
+    public void secondRequestDuringRollbackReturnsFinishedWithExceptionAndPreservesOriginalCause() {
         sql("CREATE TABLE tst(id INTEGER PRIMARY KEY, val INTEGER)");
+        sql("INSERT INTO tst VALUES (0, 1)");
 
         IgniteSql sql = igniteSql();
 
         Transaction tx = igniteTx().begin();
 
-        // Enlist enough operations to make rollback non-trivial.
-        for (int i = 0; i < 100; i++) {
-            execute(tx, sql, "INSERT INTO tst VALUES (?, ?)", i, i);
+        List<IgniteImpl> clusterNodes = CLUSTER.runningNodes()
+                .map(node -> unwrapIgniteImpl(node))
+                .collect(toList());
+
+        CompletableFuture<Void> failingRequestStarted = new CompletableFuture<>();
+        CompletableFuture<Void> finishRequestBlocked = new CompletableFuture<>();
+        CompletableFuture<Void> releaseFinishRequest = new CompletableFuture<>();
+
+        for (IgniteImpl clusterNode : clusterNodes) {
+            // Install predicates in cluster
+            clusterNode.dropMessages((recipientConsistentId, msg) -> {
+                if (!failingRequestStarted.isDone()) {
+                    return false;
+                }
+
+                if (msg.groupType() != TxMessageGroup.GROUP_TYPE
+                        || msg.messageType() != TxMessageGroup.TX_FINISH_REQUEST) {
+                    return false;
+                }
+
+                finishRequestBlocked.complete(null);
+
+                return !releaseFinishRequest.isDone();
+            });
         }
 
-        CompletableFuture<Void> failingRequestFut = IgniteTestUtils.runAsync(() -> assertThrowsSqlException(
-                Sql.RUNTIME_ERR,
-                "Division by zero",
-                () -> execute(tx, sql, "SELECT val / 0 FROM tst WHERE id = ?", 0)
-        ));
+        try {
+            CompletableFuture<IgniteException> failingRequestFut = IgniteTestUtils.runAsync(() -> {
+                failingRequestStarted.complete(null);
 
-        Awaitility.await()
-                .atMost(5, TimeUnit.SECONDS)
-                .untilAsserted(() -> {
-                    Transaction parallelTx = igniteTx().begin();
+                IgniteException ex = assertInstanceOf(
+                        IgniteException.class,
+                        assertThrowsWithCause(
+                                () -> execute(tx, sql, "SELECT val / 0 FROM tst WHERE id = ?", 0),
+                                IgniteException.class
+                        )
+                );
 
-                    try (ResultSet<SqlRow> ignored = executeForRead(sql, parallelTx, "SELECT * FROM tst WHERE id = ?", 1)) {
-                        // No-op.
-                    } finally {
-                        parallelTx.rollback();
-                    }
+                assertTrue(hasCause(ex, "Division by zero", Throwable.class));
+                assertTrue(
+                        ex.code() == Sql.RUNTIME_ERR || ex.code() == Transactions.TX_ALREADY_FINISHED_WITH_EXCEPTION_ERR,
+                        "Unexpected code for a request that triggers rollback [code=" + ex.code() + ']'
+                );
 
-                    IgniteException parallelRequestException = assertInstanceOf(
-                            IgniteException.class,
-                            assertThrowsWithCause(
-                                    () -> executeForRead(sql, tx, "SELECT * FROM tst WHERE id = ?", 1),
-                                    IgniteException.class
-                            )
-                    );
+                return ex;
+            });
 
-                    assertEquals(Transactions.TX_ALREADY_FINISHED_WITH_EXCEPTION_ERR, parallelRequestException.code());
-                    assertTrue(
-                            hasCause(parallelRequestException, "Division by zero", Throwable.class),
-                            "Expected original rollback cause in user-visible exception chain"
-                    );
-                });
+            Awaitility.await()
+                    .atMost(5, TimeUnit.SECONDS)
+                    .until(finishRequestBlocked::isDone);
 
-        await(failingRequestFut);
+            IgniteException parallelRequestException = assertInstanceOf(
+                    IgniteException.class,
+                    assertThrowsWithCause(
+                            () -> executeForRead(sql, tx, "SELECT * FROM tst WHERE id = ?", 0),
+                            IgniteException.class
+                    )
+            );
+
+            assertEquals(Transactions.TX_ALREADY_FINISHED_WITH_EXCEPTION_ERR, parallelRequestException.code());
+            assertTrue(parallelRequestException.getMessage().contains("Transaction is already finished due to an error"));
+            assertTrue(
+                    hasCause(parallelRequestException, "Division by zero", Throwable.class),
+                    "Expected original rollback cause in user-visible exception chain"
+            );
+
+            releaseFinishRequest.complete(null);
+
+            IgniteException firstRequestException = await(failingRequestFut);
+
+            assertTrue(hasCause(firstRequestException, "Division by zero", Throwable.class));
+        } finally {
+            clusterNodes.forEach(IgniteImpl::stopDroppingMessages);
+        }
     }
 
     @Test
