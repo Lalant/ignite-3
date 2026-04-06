@@ -15,20 +15,31 @@
  * limitations under the License.
  */
 
-namespace Apache.Ignite.Internal.Proto;
+package org.apache.ignite.client.handler;
 
-/// <summary>
-/// Error data extensions. When the server returns an error response, it may contain additional data in a map. Keys are defined here.
-/// </summary>
-internal static class ErrorExtensions
-{
-    /// <summary>
-    /// Expected schema version for <see cref="ErrorGroups.Table.SchemaVersionMismatch"/> error.
-    /// </summary>
-    public const string ExpectedSchemaVersion = "expected-schema-ver";
+import io.netty.buffer.ByteBuf;
+import io.netty.channel.ChannelOutboundInvoker;
+import java.util.concurrent.locks.ReentrantLock;
 
-    /// <summary>
-    /// SQL update counters for <see cref="Ignite.Sql.SqlBatchException"/> (binary format - array of big-endian longs).
-    /// </summary>
-    public const string SqlUpdateCounters2 = "sql-update-counters-2";
+class ResponseWriteGuard {
+    private final ReentrantLock lock = new ReentrantLock();
+
+    private boolean responseWritten = false;
+
+    boolean write(ChannelOutboundInvoker ctx, ByteBuf buf) {
+        // No double-check, contention or false case is extremely rare.
+        lock.lock();
+        try {
+            if (responseWritten) {
+                return false;
+            }
+
+            ctx.write(buf);
+            responseWritten = true;
+
+            return true;
+        } finally {
+            lock.unlock();
+        }
+    }
 }
