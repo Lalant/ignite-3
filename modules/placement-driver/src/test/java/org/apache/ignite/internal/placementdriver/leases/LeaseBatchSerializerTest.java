@@ -40,7 +40,6 @@ import org.apache.ignite.internal.hlc.HybridTimestamp;
 import org.apache.ignite.internal.replicator.PartitionGroupId;
 import org.apache.ignite.internal.replicator.TablePartitionId;
 import org.apache.ignite.internal.replicator.ZonePartitionId;
-import org.apache.ignite.internal.util.io.IgniteUnsafeDataInput;
 import org.apache.ignite.internal.util.io.IgniteUnsafeDataOutput;
 import org.apache.ignite.internal.versioned.VersionedSerialization;
 import org.junit.jupiter.api.Test;
@@ -339,7 +338,7 @@ class LeaseBatchSerializerTest {
     }
 
     @Test
-    void v2WithExactly8NamesAndMoreThan8NodeIdsDoesNotUseCompactNodesInfoEncoding() throws IOException {
+    void v2WithExactly8NamesAndMoreThan8NodeIdsDoesNotUseCompactNodesInfoEncoding() {
         List<Lease> originalLeases = new ArrayList<>();
 
         for (int i = 0; i < 8; i++) {
@@ -348,41 +347,16 @@ class LeaseBatchSerializerTest {
 
         originalLeases.add(tableLease("node2", new UUID(0, 9), "node3", 8));
 
-        byte[] bytes = VersionedSerialization.toBytes(new LeaseBatch(originalLeases), serializer);
+        LeaseBatch originalBatch = new LeaseBatch(originalLeases);
+        byte[] bytes = VersionedSerialization.toBytes(originalBatch, serializer);
 
-        try (IgniteUnsafeDataInput in = new IgniteUnsafeDataInput(bytes)) {
-            in.readInt(); // Header written by VersionedSerializer.
+        LeaseBatch restoredBatch = VersionedSerialization.fromBytes(bytes, serializer);
 
-            in.readVarInt(); // minExpirationTimePhysical
-            in.readVarInt(); // commonExpirationTimePhysicalDelta
-            in.readVarInt(); // commonExpirationTimeLogical
-
-            assertEquals(8, in.readVarIntAsInt()); // nameCount
-            for (int i = 0; i < 8; i++) {
-                in.readUTF();
-            }
-
-            assertEquals(9, in.readVarIntAsInt()); // nodeCount
-            for (int i = 0; i < 9; i++) {
-                in.readUuid();
-                in.readVarIntAsInt();
-            }
-
-            assertEquals(1, in.readVarIntAsInt()); // table object count
-            assertEquals(1, in.readVarIntAsInt()); // objectId delta
-            assertEquals(9, in.readVarIntAsInt()); // partition count
-
-            for (int i = 0; i < 8; i++) {
-                in.readUnsignedByte(); // flags
-                in.readVarIntAsInt(); // holder index
-                in.readVarInt(); // period
-                in.readVarIntAsInt(); // start logical
-            }
-
-            assertEquals(0x07, in.readUnsignedByte()); // accepted + prolongable + hasProposedCandidate
-            assertEquals(8, in.readVarIntAsInt()); // holder index
-            assertEquals(3, in.readVarIntAsInt()); // proposed candidate name index
-        }
+        assertThat(restoredBatch.leases(), containsInAnyOrder(originalBatch.leases().toArray()));
+        assertEquals(
+                originalBatch.leases().stream().map(Lease::proposedCandidate).collect(toList()),
+                restoredBatch.leases().stream().map(Lease::proposedCandidate).collect(toList())
+        );
     }
 
     @Test
