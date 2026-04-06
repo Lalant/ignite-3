@@ -93,6 +93,7 @@ import org.apache.ignite.internal.network.ClusterNodeImpl;
 import org.apache.ignite.internal.network.ClusterService;
 import org.apache.ignite.internal.network.InternalClusterNode;
 import org.apache.ignite.internal.network.MessagingService;
+import org.apache.ignite.internal.network.TopologyService;
 import org.apache.ignite.internal.partition.replicator.PartitionReplicaLifecycleManager;
 import org.apache.ignite.internal.partition.replicator.raft.snapshot.outgoing.OutgoingSnapshotsManager;
 import org.apache.ignite.internal.partition.replicator.schema.ValidationSchemasSource;
@@ -121,7 +122,6 @@ import org.apache.ignite.internal.testframework.InjectExecutorService;
 import org.apache.ignite.internal.testframework.failure.FailureManagerExtension;
 import org.apache.ignite.internal.tx.LockManager;
 import org.apache.ignite.internal.tx.TxManager;
-import org.apache.ignite.internal.tx.configuration.TransactionConfiguration;
 import org.apache.ignite.internal.tx.impl.RemotelyTriggeredResourceRegistry;
 import org.apache.ignite.internal.tx.impl.TransactionInflights;
 import org.apache.ignite.internal.tx.metrics.TransactionMetricsSource;
@@ -193,9 +193,6 @@ public class TableManagerTest extends IgniteAbstractTest {
     @InjectConfiguration
     private GcConfiguration gcConfig;
 
-    @InjectConfiguration
-    private TransactionConfiguration txConfig;
-
     /** Storage update configuration. */
     @InjectConfiguration
     private ReplicationConfiguration replicationConfiguration;
@@ -266,6 +263,7 @@ public class TableManagerTest extends IgniteAbstractTest {
         assertThat("Catalog initialization", catalogManager.catalogInitializationFuture(), willCompleteSuccessfully());
 
         when(clusterService.messagingService()).thenReturn(mock(MessagingService.class));
+        when(clusterService.topologyService()).thenReturn(mock(TopologyService.class));
 
         when(tm.transactionMetricsSource()).thenReturn(mock(TransactionMetricsSource.class));
 
@@ -570,7 +568,7 @@ public class TableManagerTest extends IgniteAbstractTest {
         sm = new SchemaManager(revisionUpdater, catalogManager);
 
         var tableManager = new TableManager(
-                NODE_NAME,
+                node,
                 revisionUpdater,
                 gcConfig,
                 replicationConfiguration,

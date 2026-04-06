@@ -51,6 +51,7 @@ import java.util.stream.Stream;
 import org.apache.ignite.internal.logger.IgniteLogger;
 import org.apache.ignite.internal.logger.Loggers;
 import org.jetbrains.annotations.Nullable;
+import org.jetbrains.annotations.VisibleForTesting;
 
 /**
  * File manager responsible for persisting {@link ReadModeIndexMemTable}s to index files.
@@ -215,10 +216,8 @@ class IndexFileManager {
         try (var os = new BufferedOutputStream(Files.newOutputStream(tmpFilePath, CREATE_NEW, WRITE))) {
             os.write(fileHeaderWithIndexMetas.header());
 
-            Iterator<Entry<Long, SegmentInfo>> it = indexMemTable.iterator();
-
-            while (it.hasNext()) {
-                SegmentInfo segmentInfo = it.next().getValue();
+            for (Entry<Long, SegmentInfo> longSegmentInfoEntry : indexMemTable) {
+                SegmentInfo segmentInfo = longSegmentInfoEntry.getValue();
 
                 // Segment Info may not contain payload in case of suffix truncation, see "IndexMemTable#truncateSuffix".
                 if (segmentInfo.size() > 0) {
@@ -264,6 +263,10 @@ class IndexFileManager {
         LOG.info("New index file created after compaction [path={}].", newIndexFilePath);
 
         return newIndexFilePath;
+    }
+
+    void onIndexFileRemoved(FileProperties oldIndexFileProperties) {
+        groupIndexMetas.values().forEach(groupIndexMeta -> groupIndexMeta.onIndexRemoved(oldIndexFileProperties));
     }
 
     /**
@@ -349,27 +352,14 @@ class IndexFileManager {
      * truncation, then the mapping will not contain an entry for this group. Otherwise, it will contain the smallest and largest log
      * indices across all index files for this group.
      */
-    Long2ObjectMap<GroupDescriptor> describeSegmentFile(int fileOrdinal) {
-        var result = new Long2ObjectOpenHashMap<GroupDescriptor>(groupIndexMetas.size());
+    Long2ObjectMap<IndexFileMeta> describeSegmentFile(int fileOrdinal) {
+        var result = new Long2ObjectOpenHashMap<IndexFileMeta>(groupIndexMetas.size());
 
         groupIndexMetas.forEach((groupId, groupIndexMeta) -> {
-            IndexFileMeta indexFileMeta = groupIndexMeta.indexMetaByFileOrdinal(fileOrdinal);
+            IndexFileMeta indexMeta = groupIndexMeta.effectiveIndexMetaByFileOrdinal(fileOrdinal);
 
-            if (indexFileMeta != null) {
-                // Even if index meta exists, it may still be obsolete due to suffix truncations (during suffix truncations we do not trim
-                // the meta as during prefix truncations, but add a new meta block).
-                long firstLogIndexInclusive = groupIndexMeta.firstLogIndexInclusive();
-
-                long lastLogIndexExclusive = groupIndexMeta.lastLogIndexExclusive();
-
-                boolean isObsolete = indexFileMeta.firstLogIndexInclusive() >= lastLogIndexExclusive
-                        || indexFileMeta.lastLogIndexExclusive() <= firstLogIndexInclusive;
-
-                if (!isObsolete) {
-                    var groupDescriptor = new GroupDescriptor(firstLogIndexInclusive, lastLogIndexExclusive);
-
-                    result.put((long) groupId, groupDescriptor);
-                }
+            if (indexMeta != null) {
+                result.put((long) groupId, indexMeta);
             }
         });
 
@@ -394,11 +384,7 @@ class IndexFileManager {
 
         var metaSpecs = new ArrayList<IndexMetaSpec>(numGroups);
 
-        Iterator<Entry<Long, SegmentInfo>> it = indexMemTable.iterator();
-
-        while (it.hasNext()) {
-            Entry<Long, SegmentInfo> entry = it.next();
-
+        for (Entry<Long, SegmentInfo> entry : indexMemTable) {
             // Using the boxed value to avoid unnecessary autoboxing later.
             Long groupId = entry.getKey();
 
@@ -513,6 +499,19 @@ class IndexFileManager {
         return payloadBuffer.array();
     }
 
+    /**
+     * Computes the size in bytes that the index file for the given {@code indexMemTable} will occupy on disk.
+     */
+    static long computeIndexFileSize(ReadModeIndexMemTable indexMemTable) {
+        long total = headerSize(indexMemTable.numGroups());
+
+        for (Entry<Long, SegmentInfo> longSegmentInfoEntry : indexMemTable) {
+            total += payloadSize(longSegmentInfoEntry.getValue());
+        }
+
+        return total;
+    }
+
     private static int headerSize(int numGroups) {
         return COMMON_META_SIZE + numGroups * GROUP_META_SIZE;
     }
@@ -521,18 +520,27 @@ class IndexFileManager {
         return segmentInfo.size() * Integer.BYTES;
     }
 
-    private static String indexFileName(FileProperties fileProperties) {
+    @VisibleForTesting
+    static String indexFileName(FileProperties fileProperties) {
         return String.format(INDEX_FILE_NAME_FORMAT, fileProperties.ordinal(), fileProperties.generation());
     }
 
     private void recoverIndexFileMetas(Path indexFilePath) throws IOException {
         FileProperties fileProperties = indexFileProperties(indexFilePath);
 
-        if (curFileOrdinal >= 0 && fileProperties.ordinal() != curFileOrdinal + 1) {
-            throw new IllegalStateException(String.format(
-                    "Unexpected index file ordinal. Expected %d, actual %d (%s).",
-                    curFileOrdinal + 1, fileProperties.ordinal(), indexFilePath
-            ));
+        if (curFileOrdinal >= 0) {
+            int fileOrdinal = fileProperties.ordinal();
+
+            // There can be gaps in file numbering because of suffix truncations and subsequent GCs.
+            if (fileOrdinal > curFileOrdinal + 1) {
+                LOG.info("Missing index files in [{} : {}) range, creating empty index metas", curFileOrdinal + 1, fileOrdinal);
+
+                for (int ordinal = curFileOrdinal + 1; ordinal < fileOrdinal; ordinal++) {
+                    var missingFileProperties = new FileProperties(ordinal, 0);
+
+                    putIndexFileMetasForMissingGroups(LongSet.of(), missingFileProperties);
+                }
+            }
         }
 
         curFileOrdinal = fileProperties.ordinal();
@@ -657,28 +665,6 @@ class IndexFileManager {
 
         long firstIndexKept() {
             return firstIndexKept;
-        }
-    }
-
-    /** Class that provides information about a Raft group. */
-    static class GroupDescriptor {
-        /** First log index for the group across all files (inclusive). */
-        private final long firstLogIndexInclusive;
-
-        /** Last log index for the group across all files (exclusive). */
-        private final long lastLogIndexExclusive;
-
-        private GroupDescriptor(long firstLogIndexInclusive, long lastLogIndexExclusive) {
-            this.firstLogIndexInclusive = firstLogIndexInclusive;
-            this.lastLogIndexExclusive = lastLogIndexExclusive;
-        }
-
-        long firstLogIndexInclusive() {
-            return firstLogIndexInclusive;
-        }
-
-        long lastLogIndexExclusive() {
-            return lastLogIndexExclusive;
         }
     }
 }

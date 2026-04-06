@@ -124,7 +124,6 @@ import org.apache.ignite.internal.partition.replicator.PartitionReplicaLifecycle
 import org.apache.ignite.internal.partition.replicator.network.PartitionReplicationMessageGroup;
 import org.apache.ignite.internal.partition.replicator.raft.snapshot.outgoing.OutgoingSnapshotsManager;
 import org.apache.ignite.internal.partition.replicator.schema.CatalogValidationSchemasSource;
-import org.apache.ignite.internal.partition.replicator.schema.ValidationSchemasSource;
 import org.apache.ignite.internal.partitiondistribution.Assignments;
 import org.apache.ignite.internal.placementdriver.PlacementDriverManager;
 import org.apache.ignite.internal.placementdriver.ReplicaMeta;
@@ -393,7 +392,9 @@ public class Node {
 
         ComponentWorkingDir partitionsWorkDir = partitionsPath(systemLocalConfiguration, dir);
 
-        partitionsLogStorageManager = SharedLogStorageManagerUtils.create(clusterService.nodeName(), partitionsWorkDir.raftLogPath());
+        String nodeName = clusterService.staticLocalNode().name();
+
+        partitionsLogStorageManager = SharedLogStorageManagerUtils.create(nodeName, partitionsWorkDir.raftLogPath());
 
         LogSyncer partitionsLogSyncer = partitionsLogStorageManager.logSyncer();
 
@@ -425,8 +426,7 @@ public class Node {
 
         ComponentWorkingDir cmgWorkDir = new ComponentWorkingDir(dir.resolve("cmg"));
 
-        cmgLogStorageManager =
-                SharedLogStorageManagerUtils.create(clusterService.nodeName(), cmgWorkDir.raftLogPath());
+        cmgLogStorageManager = SharedLogStorageManagerUtils.create(nodeName, cmgWorkDir.raftLogPath());
 
         RaftGroupOptionsConfigurer cmgRaftConfigurer =
                 RaftGroupOptionsConfigHelper.configureProperties(cmgLogStorageManager, cmgWorkDir.metaPath());
@@ -441,6 +441,7 @@ public class Node {
                 logicalTopology,
                 new NodeAttributesCollector(nodeAttributesConfiguration, storageConfiguration),
                 failureManager,
+                raftGroupEventsClientListener,
                 clusterIdHolder,
                 cmgRaftConfigurer,
                 metricManager
@@ -467,14 +468,13 @@ public class Node {
 
         ComponentWorkingDir metastorageWorkDir = new ComponentWorkingDir(dir.resolve("metastorage"));
 
-        msLogStorageManager =
-                SharedLogStorageManagerUtils.create(clusterService.nodeName(), metastorageWorkDir.raftLogPath());
+        msLogStorageManager = SharedLogStorageManagerUtils.create(nodeName, metastorageWorkDir.raftLogPath());
 
         RaftGroupOptionsConfigurer msRaftConfigurer =
                 RaftGroupOptionsConfigHelper.configureProperties(msLogStorageManager, metastorageWorkDir.metaPath());
 
         metaStorageManager = new MetaStorageManagerImpl(
-                clusterService,
+                clusterService.staticLocalNode(),
                 cmgManager,
                 logicalTopologyService,
                 raftManager,
@@ -656,10 +656,11 @@ public class Node {
 
         schemaManager = new SchemaManager(registry, catalogManager);
 
-        ValidationSchemasSource validationSchemasSource = new CatalogValidationSchemasSource(catalogManager, schemaManager);
+        indexMetaStorage = new IndexMetaStorage(catalogManager, lowWatermark, metaStorageManager);
+
+        var validationSchemasSource = new CatalogValidationSchemasSource(catalogManager, schemaManager, indexMetaStorage);
 
         replicaManager = new ReplicaManager(
-                name,
                 clusterService,
                 cmgManager,
                 groupId -> completedFuture(Assignments.EMPTY),
@@ -684,12 +685,10 @@ public class Node {
         raftManager.appendEntriesRequestInterceptor(new CheckCatalogVersionOnAppendEntries(catalogManager));
         raftManager.actionRequestInterceptor(new CheckCatalogVersionOnActionRequest(catalogManager));
 
-        indexMetaStorage = new IndexMetaStorage(catalogManager, lowWatermark, metaStorageManager);
-
         MinimumRequiredTimeCollectorService minTimeCollectorService = new MinimumRequiredTimeCollectorServiceImpl();
 
         catalogCompactionRunner = new CatalogCompactionRunner(
-                name,
+                clusterService.staticLocalNode(),
                 (CatalogManagerImpl) catalogManager,
                 clusterService.messagingService(),
                 logicalTopologyService,
@@ -697,7 +696,6 @@ public class Node {
                 replicaSvc,
                 clockService,
                 schemaSyncService,
-                clusterService.topologyService(),
                 lowWatermark,
                 clockService::nowLong,
                 minTimeCollectorService,
@@ -709,8 +707,7 @@ public class Node {
                 clusterConfigRegistry.getConfiguration(SystemDistributedExtensionConfiguration.KEY).system();
 
         distributionZoneManager = new DistributionZoneManager(
-                name,
-                () -> clusterService.topologyService().localMember().id(),
+                clusterService.staticLocalNode(),
                 metaStorageManager,
                 logicalTopologyService,
                 catalogManager,
@@ -737,6 +734,7 @@ public class Node {
                 distributionZoneManager,
                 metaStorageManager,
                 clusterService.topologyService(),
+                clusterService.staticLocalNode(),
                 lowWatermark,
                 failureManager,
                 threadPoolsManager.tableIoExecutor(),
@@ -754,7 +752,8 @@ public class Node {
                 outgoingSnapshotsManager,
                 metricManager,
                 clusterService.messagingService(),
-                replicaSvc
+                replicaSvc,
+                indexMetaStorage
         );
 
         resourceVacuumManager = new ResourceVacuumManager(
@@ -770,7 +769,7 @@ public class Node {
         );
 
         tableManager = new TableManager(
-                name,
+                clusterService.staticLocalNode(),
                 registry,
                 gcConfiguration,
                 replicationConfiguration,
@@ -975,6 +974,11 @@ public class Node {
      */
     public void stop() {
         invokeInterceptor = null;
+
+        // Match IgniteImpl.stopAsync() behavior: mark components as stopping before shutting down,
+        // so that in-flight Raft operations produce NodeStoppingException instead of TimeoutException.
+        cmgManager.markAsStopping();
+        metaStorageManager.markAsStopping();
 
         List<IgniteComponent> components = new ArrayList<>(nodeComponents);
         reverse(components);

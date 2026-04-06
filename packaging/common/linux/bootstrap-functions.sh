@@ -50,6 +50,11 @@ if [ -z "${CLASSPATH+x}" ]; then
   exit 1
 fi
 
+# Append extra classpath entries (e.g., lib/ext/* for log4j or other libs)
+if [ "${IGNITE3_EXTRA_CLASSPATH+set}" = "set" ] && [ -n "${IGNITE3_EXTRA_CLASSPATH}" ]; then
+    CLASSPATH="${CLASSPATH}:${IGNITE3_EXTRA_CLASSPATH}"
+fi
+
 MAIN_CLASS="@MAIN_CLASS@"
 
 export JAVA_CMD_WITH_ARGS="${JAVACMD} \
@@ -64,4 +69,5 @@ export JAVA_CMD_WITH_ARGS="${JAVACMD} \
 export APPLICATION_ARGS="\
   --config-path ${CONFIG_FILE} \
   --work-dir ${WORK_DIR} \
-  --node-name ${NODE_NAME}"
+  --node-name ${NODE_NAME} \
+  --log-dir ${LOG_DIR}"

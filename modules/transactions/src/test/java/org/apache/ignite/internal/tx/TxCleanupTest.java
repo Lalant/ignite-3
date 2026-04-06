@@ -127,8 +127,6 @@ public class TxCleanupTest extends IgniteAbstractTest {
     /** Init test callback. */
     @BeforeEach
     public void setup() {
-        when(topologyService.localMember().address()).thenReturn(LOCAL_NODE.address());
-
         when(messagingService.invoke(anyString(), any(), anyLong())).thenReturn(nullCompletedFuture());
 
         idGenerator = new TransactionIdGenerator(LOCAL_NODE.name().hashCode());
@@ -148,7 +146,8 @@ public class TxCleanupTest extends IgniteAbstractTest {
                 placementDriverHelper,
                 mock(VolatileTxStateMetaStorage.class),
                 testSyncExecutorService(),
-                testSyncScheduledExecutorService()
+                testSyncScheduledExecutorService(),
+                topologyService
         );
     }
 
