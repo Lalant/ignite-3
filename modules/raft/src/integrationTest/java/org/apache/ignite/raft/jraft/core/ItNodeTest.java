@@ -1767,10 +1767,11 @@ public class ItNodeTest extends BaseIgniteAbstractTest {
         assertTrue(cluster.start(peer1, false, 300));
 
         // add peer1
-        CountDownLatch latch = new CountDownLatch(1);
         peers.add(peer1);
-        leader.addPeer(peer1.getPeerId(), 5L, new ExpectClosure(latch));
-        waitLatch(latch);
+        SynchronizedClosure addPeer1Done = new SynchronizedClosure();
+        leader.addPeer(peer1.getPeerId(), 5L, addPeer1Done);
+        Status addPeer1Status = assertTimeoutPreemptively(Duration.ofSeconds(30), addPeer1Done::await);
+        assertTrue(addPeer1Status.isOk(), "addPeer(peer1) failed: " + addPeer1Status);
 
         cluster.ensureSame();
         assertEquals(2, cluster.getFsms().size());
@@ -1779,25 +1780,34 @@ public class ItNodeTest extends BaseIgniteAbstractTest {
 
         // add peer2 but not start
         peers.add(peer2);
-        latch = new CountDownLatch(1);
-        leader.addPeer(peer2.getPeerId(), 6L, new ExpectClosure(RaftError.ECATCHUP, latch));
-        waitLatch(latch);
+        SynchronizedClosure addPeer2BeforeStartDone = new SynchronizedClosure();
+        leader.addPeer(peer2.getPeerId(), 6L, addPeer2BeforeStartDone);
+        Status addPeer2BeforeStartStatus = assertTimeoutPreemptively(Duration.ofSeconds(30), addPeer2BeforeStartDone::await);
+        assertEquals(RaftError.ECATCHUP, addPeer2BeforeStartStatus.getRaftError(),
+                "addPeer(peer2) before startup should fail with ECATCHUP: " + addPeer2BeforeStartStatus);
 
         // start peer2 after 2 seconds
         Thread.sleep(2000);
         assertTrue(cluster.start(peer2, false, 300));
 
         // re-add peer2
-        latch = new CountDownLatch(2);
-        leader.addPeer(peer2.getPeerId(), 7L, new ExpectClosure(latch));
+        SynchronizedClosure addPeer2Done = new SynchronizedClosure();
+        leader.addPeer(peer2.getPeerId(), 7L, addPeer2Done);
         // concurrent configuration change
-        leader.addPeer(peer3.getPeerId(), 8L, new ExpectClosure(RaftError.EBUSY, latch));
-        waitLatch(latch);
+        SynchronizedClosure addPeer3Done = new SynchronizedClosure();
+        leader.addPeer(peer3.getPeerId(), 8L, addPeer3Done);
+
+        Status addPeer2Status = assertTimeoutPreemptively(Duration.ofSeconds(30), addPeer2Done::await);
+        assertTrue(addPeer2Status.isOk(), "re-add peer2 failed: " + addPeer2Status);
+
+        Status addPeer3Status = assertTimeoutPreemptively(Duration.ofSeconds(30), addPeer3Done::await);
+        assertEquals(RaftError.EBUSY, addPeer3Status.getRaftError(),
+                "concurrent addPeer(peer3) should fail with EBUSY: " + addPeer3Status);
 
         // re-add peer2 directly
 
         try {
-            leader.addPeer(peer2.getPeerId(), 9L, new ExpectClosure(latch));
+            leader.addPeer(peer2.getPeerId(), 9L, new SynchronizedClosure());
             fail();
         }
         catch (IllegalArgumentException e) {
