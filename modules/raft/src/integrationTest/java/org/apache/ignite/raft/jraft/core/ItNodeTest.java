@@ -3066,9 +3066,7 @@ public class ItNodeTest extends BaseIgniteAbstractTest {
         cluster.stop(leader.getLeaderId());
         log.info("Leader stopped.");
 
-        Thread.sleep(30_000);
-
-        await().atMost(10, TimeUnit.SECONDS)
+        await().atMost(30, TimeUnit.SECONDS)
                 .until(() -> cluster.getNode(peers.get(2).getPeerId()).isInstallingSnapshot());
     }
 
